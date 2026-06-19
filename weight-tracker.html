@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Seguimiento de peso</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --blue:#2E5A88; --blue-d:#234766; --blue-l:#E8F0F8;
+    --green:#2E8B57; --red:#C0392B; --grey:#6b7280;
+    --bg:#f4f6f9; --card:#ffffff; --line:#e3e8ef;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
+       background:var(--bg);color:#1f2937;padding:18px;}
+  .wrap{max-width:920px;margin:0 auto;}
+  h1{font-size:1.35rem;color:var(--blue);margin:0 0 2px;}
+  .sub{color:var(--grey);font-size:.85rem;margin-bottom:16px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+        padding:16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04);}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;}
+  .stat{background:var(--blue-l);border-radius:10px;padding:12px;text-align:center;}
+  .stat .v{font-size:1.4rem;font-weight:700;color:var(--blue-d);}
+  .stat .l{font-size:.72rem;color:var(--grey);text-transform:uppercase;letter-spacing:.03em;margin-top:2px;}
+  .eta{font-size:.85rem;color:var(--blue-d);margin-top:10px;text-align:center;}
+  .form{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;}
+  .form label{display:flex;flex-direction:column;font-size:.72rem;color:var(--grey);gap:3px;}
+  input{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;}
+  button{font:inherit;font-weight:600;cursor:pointer;border:none;border-radius:8px;
+         padding:9px 16px;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-d);}
+  button.ghost{background:#fff;color:var(--red);border:1px solid var(--line);padding:4px 9px;font-size:.78rem;}
+  .miles{display:grid;gap:8px;}
+  .mile{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:10px;
+        background:#fafbfc;border:1px solid var(--line);}
+  .mile.done{background:#eaf7ef;border-color:#bfe6cd;}
+  .dot{width:22px;height:22px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;
+       justify-content:center;font-size:.8rem;color:#fff;background:#cbd5e1;font-weight:700;}
+  .mile.done .dot{background:var(--green);}
+  .mile .mt{font-weight:600;font-size:.9rem;}
+  .mile .ms{font-size:.78rem;color:var(--grey);}
+  .mile .spacer{flex:1;}
+  .entries{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto;}
+  .entry{display:flex;align-items:center;gap:10px;font-size:.86rem;padding:6px 4px;border-bottom:1px solid var(--line);}
+  .entry .ed{color:var(--grey);width:96px;}
+  .entry .ew{font-weight:600;}
+  h2{font-size:.95rem;color:var(--blue);margin:0 0 12px;text-transform:uppercase;letter-spacing:.04em;}
+  .empty{color:var(--grey);font-size:.85rem;}
+  canvas{max-height:340px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Seguimiento de peso</h1>
+  <div class="sub">Inicio 88,4 kg · 1,70 m · meta saludable 66–72 kg · plan 1.700 kcal</div>
+
+  <div class="card">
+    <div class="stats" id="stats"></div>
+    <div class="eta" id="eta"></div>
+  </div>
+
+  <div class="card">
+    <canvas id="chart"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>Registrar pesaje</h2>
+    <div class="form">
+      <label>Fecha<input type="date" id="fDate"></label>
+      <label>Peso (kg)<input type="number" id="fW" step="0.1" min="40" max="200" placeholder="88.4"></label>
+      <button id="add">Agregar</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Hitos</h2>
+    <div class="miles" id="miles"></div>
+  </div>
+
+  <div class="card">
+    <h2>Historial</h2>
+    <div class="entries" id="entries"><div class="empty">Aún no hay pesajes registrados.</div></div>
+  </div>
+</div>
+
+<script>
+const START = 88.4, H2 = 1.70*1.70, KEY = 'dash2_weight';
+const PROJ = [88.4,85.8,83.6,81.6,79.7,77.9,76.2,74.6,73.1,71.7,70.4,69.2,68.1]; // mensual
+const WEEKS = 52;
+const MILES = [
+  {w:84.0, t:'5% del peso', s:'−4,4 kg · mejora metabólica'},
+  {w:79.6, t:'10% del peso', s:'−8,8 kg'},
+  {w:78.0, t:'IMC 27', s:'baja el riesgo cardiometabólico'},
+  {w:72.0, t:'Sales de sobrepeso', s:'IMC < 25'},
+  {w:68.0, t:'Zona ideal', s:'IMC ≈ 23,5'},
+  {w:63.6, t:'IMC 22', s:'centro del rango saludable'},
+];
+
+let mem = null;
+function load(){ try{ const v=localStorage.getItem(KEY); return v?JSON.parse(v):{entries:[]}; }
+  catch(e){ return mem||{entries:[]}; } }
+function save(s){ mem=s; try{ localStorage.setItem(KEY, JSON.stringify(s)); }catch(e){} }
+
+function weeklyTarget(){ // interpola la proyección mensual a 53 puntos semanales
+  const out=[]; const wkPerMo=52/12;
+  for(let w=0; w<=WEEKS; w++){
+    const m=w/wkPerMo, i=Math.floor(m), f=m-i;
+    const a=PROJ[Math.min(i,12)], b=PROJ[Math.min(i+1,12)];
+    out.push(+(a+(b-a)*f).toFixed(2));
+  }
+  return out;
+}
+
+function sortedEntries(){ return load().entries.slice().sort((a,b)=>a.date.localeCompare(b.date)); }
+
+function realSeries(){
+  const e=sortedEntries(); if(!e.length) return {data:[], start:null, latest:null};
+  const start=new Date(e[0].date);
+  const arr=new Array(WEEKS+1).fill(null);
+  e.forEach(x=>{ const wk=Math.round((new Date(x.date)-start)/(7*864e5)); if(wk>=0&&wk<=WEEKS) arr[wk]=x.weight; });
+  return {data:arr, start, latest:e[e.length-1]};
+}
+
+let chart;
+function render(){
+  const tgt=weeklyTarget();
+  const {data:real, latest}=realSeries();
+  const labels=[...Array(WEEKS+1).keys()];
+  const ref=new Array(WEEKS+1).fill(72);
+
+  // chart
+  const ctx=document.getElementById('chart');
+  const ds=[
+    {label:'Objetivo (plan)',data:tgt,borderColor:'#2E5A88',backgroundColor:'rgba(46,90,136,.08)',
+     borderWidth:2,pointRadius:0,tension:.3,fill:true},
+    {label:'Peso real',data:real,borderColor:'#2E8B57',backgroundColor:'#2E8B57',
+     borderWidth:2.5,pointRadius:4,pointHoverRadius:6,spanGaps:true,tension:.2},
+    {label:'IMC 25 (72 kg)',data:ref,borderColor:'#C0392B',borderWidth:1.5,
+     borderDash:[6,5],pointRadius:0},
+  ];
+  if(chart){ chart.data.datasets=ds; chart.update(); }
+  else chart=new Chart(ctx,{type:'line',data:{labels,datasets:ds},options:{
+    responsive:true,interaction:{mode:'index',intersect:false},
+    scales:{
+      y:{min:62,max:90,title:{display:true,text:'Peso (kg)'}},
+      x:{title:{display:true,text:'Semanas'},
+         ticks:{callback:(v,i)=> i%4===0? i : ''}}
+    },
+    plugins:{legend:{labels:{boxWidth:14,font:{size:11}}}}
+  }});
+
+  // stats
+  const cur = latest? latest.weight : START;
+  const lost = +(START-cur).toFixed(1);
+  const pct = (lost/START*100).toFixed(1);
+  const bmi = (cur/H2).toFixed(1);
+  const to72 = +(cur-72).toFixed(1);
+  document.getElementById('stats').innerHTML=`
+    <div class="stat"><div class="v">${cur.toFixed(1)}</div><div class="l">Peso actual (kg)</div></div>
+    <div class="stat"><div class="v">${lost>=0?'−':'+'}${Math.abs(lost)}</div><div class="l">Perdido (kg)</div></div>
+    <div class="stat"><div class="v">${pct}%</div><div class="l">del peso inicial</div></div>
+    <div class="stat"><div class="v">${bmi}</div><div class="l">IMC actual</div></div>
+    <div class="stat"><div class="v">${to72>0?to72:0}</div><div class="l">Falta a 72 kg</div></div>`;
+
+  // ETA según ritmo real
+  const e=sortedEntries(); const eta=document.getElementById('eta');
+  if(e.length>=2){
+    const days=(new Date(e[e.length-1].date)-new Date(e[0].date))/864e5;
+    const drop=e[0].weight-e[e.length-1].weight;
+    if(days>0 && drop>0){
+      const rate=drop/days*7; // kg/semana
+      const wks72=(cur-72)/rate;
+      const d=new Date(); d.setDate(d.getDate()+wks72*7);
+      eta.textContent = cur>72
+        ? `Ritmo real: ${rate.toFixed(2)} kg/sem → llegarías a 72 kg ~${d.toLocaleDateString('es-CL',{month:'long',year:'numeric'})}.`
+        : `Ya estás en rango saludable (IMC ${bmi}). Foco en mantener y composición.`;
+    } else eta.textContent='';
+  } else eta.textContent = e.length? 'Agrega otro pesaje para estimar tu fecha objetivo.' : '';
+
+  // milestones (logrado si el mínimo real alcanzado ≤ umbral)
+  const minReal = e.length? Math.min(...e.map(x=>x.weight)) : START;
+  document.getElementById('miles').innerHTML = MILES.map(m=>{
+    const done = minReal<=m.w;
+    const falta = (cur-m.w).toFixed(1);
+    return `<div class="mile ${done?'done':''}">
+      <div class="dot">${done?'✓':''}</div>
+      <div><div class="mt">${m.t} · ${m.w.toFixed(1)} kg</div><div class="ms">${m.s}</div></div>
+      <div class="spacer"></div>
+      <div class="ms">${done?'Logrado':(cur>m.w?`faltan ${falta} kg`:'—')}</div>
+    </div>`;
+  }).join('');
+
+  // historial
+  const cont=document.getElementById('entries');
+  if(!e.length){ cont.innerHTML='<div class="empty">Aún no hay pesajes registrados.</div>'; return; }
+  cont.innerHTML = e.slice().reverse().map(x=>`
+    <div class="entry">
+      <span class="ed">${new Date(x.date).toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'2-digit'})}</span>
+      <span class="ew">${x.weight.toFixed(1)} kg</span>
+      <span style="flex:1"></span>
+      <button class="ghost" data-id="${x.date}_${x.weight}">Eliminar</button>
+    </div>`).join('');
+  cont.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    const s=load(); const id=b.dataset.id;
+    s.entries=s.entries.filter(x=>`${x.date}_${x.weight}`!==id); save(s); render();
+  });
+}
+
+document.getElementById('fDate').valueAsDate=new Date();
+document.getElementById('add').onclick=()=>{
+  const date=document.getElementById('fDate').value;
+  const w=parseFloat(document.getElementById('fW').value);
+  if(!date||!w||w<40||w>200){ alert('Ingresa una fecha y un peso válido.'); return; }
+  const s=load();
+  s.entries=s.entries.filter(x=>x.date!==date); // un pesaje por día
+  s.entries.push({date,weight:+w.toFixed(1)});
+  save(s); document.getElementById('fW').value=''; render();
+};
+
+render();
+</script>
+</body>
+</html>
